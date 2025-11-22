@@ -381,7 +381,6 @@ void Explore::reachedGoal(const NavigationGoalHandle::WrappedResult& result,
       RCLCPP_INFO(logger_, "Frontier at (%.2f, %.2f) blacklisted: goal aborted",
                   frontier_goal.x, frontier_goal.y);
       frontier_blacklist_.push_back(frontier_goal);
-      return;
       // If it was aborted probably because we've found another frontier goal,
       // so just return and don't make plan again
       return;
