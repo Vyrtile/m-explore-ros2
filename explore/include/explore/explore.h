@@ -140,6 +140,8 @@ private:
   bool return_to_init_;
   std::string robot_base_frame_;
   bool resuming_ = false;
+  double no_frontier_timeout_;
+  rclcpp::Time last_frontier_found_time_;
 };
 }  // namespace explore
 

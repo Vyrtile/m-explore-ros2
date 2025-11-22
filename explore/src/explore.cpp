@@ -64,6 +64,7 @@ Explore::Explore()
   double min_frontier_size;
   this->declare_parameter<float>("planner_frequency", 1.0);
   this->declare_parameter<float>("progress_timeout", 30.0);
+  this->declare_parameter<float>("no_frontier_timeout", 20.0);  // ADD THIS LINE
   this->declare_parameter<bool>("visualize", false);
   this->declare_parameter<float>("potential_scale", 1e-3);
   this->declare_parameter<float>("orientation_scale", 0.0);
@@ -73,6 +74,7 @@ Explore::Explore()
 
   this->get_parameter("planner_frequency", planner_frequency_);
   this->get_parameter("progress_timeout", timeout);
+  this->get_parameter("no_frontier_timeout", no_frontier_timeout_);  // ADD THIS LINE
   this->get_parameter("visualize", visualize_);
   this->get_parameter("potential_scale", potential_scale_);
   this->get_parameter("orientation_scale", orientation_scale_);
@@ -82,6 +84,8 @@ Explore::Explore()
   this->get_parameter("robot_base_frame", robot_base_frame_);
 
   progress_timeout_ = timeout;
+  last_frontier_found_time_ = this->now();
+  
   move_base_client_ =
       rclcpp_action::create_client<nav2_msgs::action::NavigateToPose>(
           this, ACTION_NAME);
@@ -249,9 +253,20 @@ void Explore::makePlan()
   }
 
   if (frontiers.empty()) {
-    RCLCPP_WARN(logger_, "No frontiers found, stopping.");
-    stop(true);
-    return;
+    double time_without_frontiers = (this->now() - last_frontier_found_time_).seconds();
+    
+    if (time_without_frontiers > no_frontier_timeout_) {
+      RCLCPP_WARN(logger_, "No frontiers found for %.1f seconds, stopping exploration.",
+                  time_without_frontiers);
+      stop(true);
+      return;
+    } else {
+      RCLCPP_INFO(logger_, "No frontiers found, waiting %.1f more seconds before stopping...",
+                  no_frontier_timeout_ - time_without_frontiers);
+      return;
+    }
+  } else {
+    last_frontier_found_time_ = this->now();
   }
 
   // publish frontiers as visualization markers
@@ -282,10 +297,11 @@ void Explore::makePlan()
     prev_distance_ = frontier->min_distance;
   }
   // black list if we've made no progress for a long time
-  if ((this->now() - last_progress_ >
-      tf2::durationFromSec(progress_timeout_)) && !resuming_) {
+  if ((this->now() - last_progress_ > tf2::durationFromSec(progress_timeout_)) && !resuming_) {
+    RCLCPP_INFO(logger_, "Frontier at (%.2f, %.2f) blacklisted: no progress for %.1f s",
+                target_position.x, target_position.y,
+                (this->now() - last_progress_).seconds());
     frontier_blacklist_.push_back(target_position);
-    RCLCPP_DEBUG(logger_, "Adding current goal to black list");
     makePlan();
     return;
   }
@@ -362,9 +378,10 @@ void Explore::reachedGoal(const NavigationGoalHandle::WrappedResult& result,
       RCLCPP_DEBUG(logger_, "Goal was successful");
       break;
     case rclcpp_action::ResultCode::ABORTED:
-      RCLCPP_DEBUG(logger_, "Goal was aborted");
+      RCLCPP_INFO(logger_, "Frontier at (%.2f, %.2f) blacklisted: goal aborted",
+                  frontier_goal.x, frontier_goal.y);
       frontier_blacklist_.push_back(frontier_goal);
-      RCLCPP_DEBUG(logger_, "Adding current goal to black list");
+      return;
       // If it was aborted probably because we've found another frontier goal,
       // so just return and don't make plan again
       return;
@@ -408,6 +425,7 @@ void Explore::stop(bool finished_exploring)
 void Explore::resume()
 {
   resuming_ = true;
+  last_frontier_found_time_ = this->now();
   RCLCPP_INFO(logger_, "Exploration resuming.");
   // Reactivate the timer
   exploring_timer_->reset();
